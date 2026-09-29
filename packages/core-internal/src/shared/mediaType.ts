@@ -31,11 +31,16 @@ export function mediaTypeEssence(header: string | null | undefined): string | un
         return contentType.parse(header).type;
     } catch {
         const essence = (header.split(';', 1)[0] ?? '').trim().toLowerCase();
-        // A comma in the parameter tail of an unparseable value indicates
-        // joined duplicate headers — ambiguous, so no essence at all (keeps
-        // duplicate-header handling uniform whether or not the first copy
-        // carries parameters).
-        if (essence === '' || header.slice(essence.length).includes(',')) {
+        // Any comma in an unparseable value indicates joined duplicate headers
+        // — `Headers.get()` joins repeated headers with ', ' — so the media type
+        // is ambiguous and there is no essence at all. The check has to look at
+        // the whole value, not at the text following the essence: with no
+        // parameters the comma lands inside the media-type segment itself
+        // (`application/json, application/json`), and slicing the raw header at
+        // the normalized essence's offset steps over it. A comma inside a
+        // quoted parameter value (`text/plain; foo="a,b"`) never reaches here,
+        // because that value parses.
+        if (essence === '' || header.includes(',')) {
             return undefined;
         }
         return essence;
