@@ -158,10 +158,10 @@ export class UriTemplate {
                 return '#' + encoded.join(',');
             }
             case '.': {
-                return '.' + encoded.join('.');
+                return '.' + encoded.join(part.exploded ? '.' : ',');
             }
             case '/': {
-                return '/' + encoded.join('/');
+                return '/' + encoded.join(part.exploded ? '/' : ',');
             }
             default: {
                 return encoded.join(',');
@@ -202,8 +202,8 @@ export class UriTemplate {
         operator: string;
         names: string[];
         exploded: boolean;
-    }): Array<{ pattern: string; name: string }> {
-        const patterns: Array<{ pattern: string; name: string }> = [];
+    }): Array<{ pattern: string; name: string; separator?: string }> {
+        const patterns: Array<{ pattern: string; name: string; separator?: string }> = [];
 
         // Validate variable name length for matching
         for (const name of part.names) {
@@ -236,11 +236,11 @@ export class UriTemplate {
                 break;
             }
             case '.': {
-                pattern = String.raw`\.([^/,]+)`;
+                pattern = part.exploded ? String.raw`\.([^/,]+(?:[.,][^/,]+)*)` : String.raw`\.([^/]+)`;
                 break;
             }
             case '/': {
-                pattern = '/' + (part.exploded ? '([^/,]+(?:,[^/,]+)*)' : '([^/,]+)');
+                pattern = '/' + (part.exploded ? '([^/,]+(?:[,/][^/,]+)*)' : '([^/]+)');
                 break;
             }
             default: {
@@ -248,23 +248,27 @@ export class UriTemplate {
             }
         }
 
-        patterns.push({ pattern, name });
+        // The label and path operators join an exploded list with their own
+        // separator, so `match` needs to know which one to split on.
+        const separator = part.operator === '.' ? '.' : part.operator === '/' ? '/' : undefined;
+
+        patterns.push({ pattern, name, separator });
         return patterns;
     }
 
     match(uri: string): Variables | null {
         UriTemplate.validateLength(uri, MAX_TEMPLATE_LENGTH, 'URI');
         let pattern = '^';
-        const names: Array<{ name: string; exploded: boolean }> = [];
+        const names: Array<{ name: string; exploded: boolean; separator?: string }> = [];
 
         for (const part of this.parts) {
             if (typeof part === 'string') {
                 pattern += this.escapeRegExp(part);
             } else {
                 const patterns = this.partToRegExp(part);
-                for (const { pattern: partPattern, name } of patterns) {
+                for (const { pattern: partPattern, name, separator } of patterns) {
                     pattern += partPattern;
-                    names.push({ name, exploded: part.exploded });
+                    names.push({ name, exploded: part.exploded, separator });
                 }
             }
         }
@@ -278,11 +282,17 @@ export class UriTemplate {
 
         const result: Variables = {};
         for (const [i, name_] of names.entries()) {
-            const { name, exploded } = name_!;
+            const { name, exploded, separator } = name_!;
             const value = match[i + 1]!;
             const cleanName = name.replace('*', '');
 
-            result[cleanName] = exploded && value.includes(',') ? value.split(',') : value;
+            // An exploded label or path list is joined with the operator's own
+            // separator, so normalize it to the comma the split below already
+            // handles. A `.` inside a path segment and a `/` inside a label are
+            // left alone because only the operator's own separator is replaced.
+            const normalized = exploded && separator ? value.replaceAll(separator, ',') : value;
+
+            result[cleanName] = exploded && normalized.includes(',') ? normalized.split(',') : value;
         }
 
         return result;

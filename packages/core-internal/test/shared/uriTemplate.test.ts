@@ -111,6 +111,41 @@ describe('UriTemplate', () => {
         });
     });
 
+    describe('exploded path and label expressions', () => {
+        // RFC 6570: a list joined with the operator separator (`/a/b`, `.a.b`)
+        // only when the expression is exploded; otherwise it is comma-joined
+        // like every other operator. The matcher has to understand both forms
+        // so a URI the expander produced can be routed back to the handler.
+        it('should comma-join a non-exploded list for the path and label operators', () => {
+            expect(new UriTemplate('{/list}').expand({ list: ['a', 'b'] })).toBe('/a,b');
+            expect(new UriTemplate('{.list}').expand({ list: ['a', 'b'] })).toBe('.a,b');
+        });
+
+        it('should match a URI expanded from an exploded path expression', () => {
+            const template = new UriTemplate('{/list*}');
+            const expanded = template.expand({ list: ['a', 'b'] });
+            expect(expanded).toBe('/a/b');
+            expect(template.match(expanded)).toEqual({ list: ['a', 'b'] });
+        });
+
+        it('should match a URI expanded from an exploded label expression', () => {
+            const template = new UriTemplate('{.list*}');
+            const expanded = template.expand({ list: ['a', 'b'] });
+            expect(expanded).toBe('.a.b');
+            expect(template.match(expanded)).toEqual({ list: ['a', 'b'] });
+        });
+
+        it('should keep a single-element exploded list as one value', () => {
+            expect(new UriTemplate('{/list*}').match('/a')).toEqual({ list: 'a' });
+            expect(new UriTemplate('{/list}').match('/a,b')).toEqual({ list: 'a,b' });
+        });
+
+        it('should not split on separators inside a value', () => {
+            expect(new UriTemplate('{/list*}').match('/a.b/c')).toEqual({ list: ['a.b', 'c'] });
+            expect(new UriTemplate('{.list*}').match('.a/b')).toBeNull();
+        });
+    });
+
     describe('edge cases', () => {
         it('should handle empty variables', () => {
             const template = new UriTemplate('{empty}');
@@ -296,6 +331,20 @@ describe('UriTemplate', () => {
 
             // Should complete in under 100ms, not hang for seconds
             expect(elapsed).toBeLessThan(100);
+        });
+
+        it('should not be vulnerable to ReDoS when a match ultimately fails', () => {
+            // The group the exploded path/label operators emit repeats over a
+            // separator class, so a payload full of separators and a literal
+            // that can never match is the case that would expose a separator
+            // class overlapping the segment class.
+            for (const template of ['{/id*}.json', 'X{.id*}.json']) {
+                const uri = template.startsWith('{/') ? '/' + ','.repeat(22) : 'X' + '.'.repeat(22);
+
+                const start = Date.now();
+                expect(new UriTemplate(template).match(uri)).toBeNull();
+                expect(Date.now() - start).toBeLessThan(250);
+            }
         });
 
         it('should not be vulnerable to ReDoS with exploded simple patterns', () => {
